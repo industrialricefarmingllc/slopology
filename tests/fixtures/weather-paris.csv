@@ -1,0 +1,16 @@
+latitude,longitude,elevation,utc_offset_seconds,timezone,timezone_abbreviation
+48.853382,2.355208,46.0,3600,Europe/Paris,GMT+1
+
+time,temperature_2m (°C),relative_humidity_2m (%),apparent_temperature (°C),is_day (),precipitation (mm),rain (mm),showers (mm),snowfall (cm),weather_code (wmo code),cloud_cover (%),pressure_msl (hPa),surface_pressure (hPa),wind_speed_10m (km/h),wind_direction_10m (°),wind_gusts_10m (km/h),visibility (m),dew_point_2m (°C),uv_index ()
+2026-11-15T02:45,7.2,89,5.0,0,0.00,0.00,0.00,0.00,61,100,1009.9,1004.3,6.9,208,14.8,20420.00,5.5,0.00
+
+time,temperature_2m (°C),apparent_temperature (°C),relative_humidity_2m (%),dew_point_2m (°C),precipitation_probability (%),precipitation (mm),rain (mm),showers (mm),snowfall (cm),weather_code (wmo code),cloud_cover (%),visibility (m),wind_speed_10m (km/h),wind_direction_10m (°),wind_gusts_10m (km/h),uv_index (),is_day (),pressure_msl (hPa)
+2026-11-15T02:00,7.0,4.9,89,5.3,55,0.00,0.00,0.00,0.00,3,100,21160.00,6.3,193,14.0,0.00,0,1010.2
+2026-11-15T03:00,7.2,5.1,89,5.5,35,0.20,0.20,0.00,0.00,61,100,20060.00,7.1,210,14.8,0.00,0,1009.8
+2026-11-15T04:00,7.5,5.3,89,5.8,38,0.20,0.20,0.00,0.00,53,100,19920.00,7.9,210,15.8,0.00,0,1009.7
+2026-11-15T05:00,7.7,4.8,82,4.8,13,0.00,0.00,0.00,0.00,3,100,28820.00,11.0,218,22.3,0.00,0,1009.5
+
+time,weather_code (wmo code),temperature_2m_max (°C),temperature_2m_min (°C),apparent_temperature_max (°C),apparent_temperature_min (°C),sunrise (iso8601),sunset (iso8601),daylight_duration (s),sunshine_duration (s),uv_index_max (),precipitation_sum (mm),rain_sum (mm),showers_sum (mm),snowfall_sum (cm),precipitation_hours (h),precipitation_probability_max (%),wind_speed_10m_max (km/h),wind_gusts_10m_max (km/h),wind_direction_10m_dominant (°),shortwave_radiation_sum (MJ/m²),et0_fao_evapotranspiration (mm)
+2026-11-15,80,12.8,5.8,10.4,3.1,2026-11-15T07:59,2026-11-15T17:10,33046.95,464.67,0.65,2.70,2.40,0.00,0.00,7.0,78,22.7,46.8,198,1.59,0.69
+2026-11-16,61,12.8,10.2,10.3,7.2,2026-11-16T08:01,2026-11-16T17:09,32884.95,0.00,1.45,7.41,7.35,0.03,0.00,9.0,88,17.2,42.5,224,2.28,0.84
+2026-11-17,80,16.5,12.4,13.5,9.4,2026-11-17T08:02,2026-11-17T17:08,32726.93,14867.91,2.00,12.86,9.45,3.08,0.00,14.0,100,32.2,78.8,227,4.50,1.70

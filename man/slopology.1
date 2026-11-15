@@ -1,0 +1,159 @@
+.TH SLOPOLOGY 1 "2026-11-15" "slopology 0.1.0" "User Commands"
+.SH NAME
+slopology \- daylight, twilight and weather for any place on Earth
+.SH SYNOPSIS
+.B slopology
+.RI [ command ]
+.RI [ options ]
+.SH DESCRIPTION
+.B slopology
+prints one JSON document, or a short human-readable table, describing the sun
+and the weather at a position.
+.PP
+Sun, twilight and golden/blue hour times come from NOAA's general solar
+position equations and need no network. The forecast, geocoding and network
+position come from Open-Meteo (CC BY 4.0), ipapi.co and ip-api.com.
+.PP
+The tool is POSIX shell and awk; it needs no compiler, no interpreter beyond
+.BR awk ,
+and no dependencies outside a base Unix installation except
+.BR curl " or " wget
+for the network commands.
+.SH COMMANDS
+.TP
+.B now
+Phase, next boundary and current weather (the default).
+.TP
+.B sun
+Sunrise, sunset, solar noon, the three twilights, golden and blue hour, and
+day length.
+.TP
+.B phase
+Phase, sun elevation and azimuth, daylight progress, the next boundary and
+the next eight boundaries, with the full solar day embedded.
+.TP
+.B night
+The sunset to sunrise window, with an active flag and polar state.
+.TP
+.B position
+Elevation, azimuth, zenith, declination and hour angle.
+.TP
+.B weather
+Current conditions, the next hours and the daily forecast.
+.TP
+.BI "place " query
+Geocoder results with coordinates and time zones.
+.TP
+.B where
+The position this network appears to be at.
+.TP
+.BI "wmo " [code]
+One WMO weather code, or the whole table.
+.TP
+.BI "convert " "value from to"
+Unit conversion, for example
+.B 20 c f
+or
+.B 1013.25 hpa inhg.
+.SH OPTIONS
+.TP
+.BI "\-\-lat " N " \-\-lon " N
+Explicit position.
+.TP
+.BI "\-\-place " NAME
+Geocode a place instead of using coordinates.
+.TP
+.BI "\-\-tz " ZONE
+IANA zone, for example Europe/Paris. Defaults to the place's zone, or the
+machine's.
+.TP
+.BI "\-\-date " WHEN
+.BR now ,
+epoch seconds, YYYY-MM-DD, or ISO-8601. Defaults to now.
+.TP
+.B \-\-hour12
+Print 12-hour clocks.
+.TP
+.B \-\-json
+Print the full JSON document instead of text.
+.TP
+.B \-\-units metric|imperial
+Degrees Celsius and km/h and mm, or Fahrenheit and mph and inches.
+.TP
+.BI "\-\-days " N
+Forecast days, 1 to 16. Default 7.
+.TP
+.BI "\-\-hours " N
+Forecast hours, 1 to 384. Default 25.
+.TP
+.BI "\-\-max-age " SECONDS
+Forecast cache lifetime. Default 900.
+.TP
+.B \-\-no-cache
+Neither read nor write the cache.
+.TP
+.B \-\-offline
+Use the cache only; never touch the network.
+.TP
+.B \-\-refresh
+Ignore a fresh cache entry and fetch again.
+.TP
+.B \-\-csv
+With
+.BR weather ,
+print the provider's raw CSV.
+.TP
+.B \-\-version
+Print the version.
+.TP
+.B \-\-help
+Print usage.
+.SH ENVIRONMENT
+.TP
+.B SKY_LIB_DIR
+Where
+.B sky.sh
+and
+.B sky.awk
+live. Default /usr/local/lib/slopology.
+.TP
+.B SKY_UNITS, SKY_DAYS, SKY_HOURS, SKY_LANG, SKY_MAX_AGE, SKY_CACHE,
+.B SKY_CACHE_DIR, SKY_OFFLINE, SKY_REFRESH, SKY_HOUR12
+Defaults for the matching options.
+.TP
+.B SKY_FETCH_CMD
+A shell snippet that prints a URL's body; the URL is
+.BR "$1" .
+Use it to plug in another HTTP client or a local fixture.
+.TP
+.B SKY_CURRENT, SKY_HOURLY, SKY_DAILY
+Override the Open-Meteo variable lists.
+.SH OUTPUT
+JSON times are given as
+.B at
+(Unix seconds),
+.B iso
+(ISO-8601 with the place's offset) and
+.B minute
+(wall-clock minutes after local midnight). Events that do not occur are null.
+See the README for the complete schema of each command.
+.SH EXAMPLES
+.PP
+.nf
+slopology sun --place Tokyo
+slopology weather --lat 51.5074 --lon -0.1278 --units imperial
+slopology night --place Reykjavik --json
+slopology now --json | jq .phase.phase
+.fi
+.SH EXIT STATUS
+0 on success, 2 for a bad invocation, 1 when the service or the cache cannot
+answer.
+.SH FILES
+.TP
+.I $XDG_CACHE_HOME/slopology
+Forecast cache, one CSV and one timestamp per position, unit system, forecast
+length and zone.
+.SH SEE ALSO
+The README in the source distribution.
+.SH AUTHORS
+industrialricefarmingllc. Extracted from Lucid (https://github.com/Sn3akyy1/lucid).

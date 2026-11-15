@@ -1,0 +1,565 @@
+#!/bin/sh
+# slopology — daylight, twilight and weather for any place on Earth.
+# POSIX shell + awk; no dependencies beyond curl or wget.
+
+set -u
+
+_self="$0"
+case "${_self}" in
+    */*) ;;
+    *) _self=$(command -v "${_self}" 2>/dev/null || printf '%s' "$0") ;;
+esac
+_dir=$(CDPATH= cd -- "$(dirname -- "${_self}")" 2>/dev/null && pwd -P) || _dir=.
+
+for _candidate in \
+    "${SKY_LIB_DIR:-}" \
+    "${_dir}/../lib/slopology" \
+    "${_dir}/../lib" \
+    "${_dir}/lib" \
+    "/usr/local/lib/slopology" \
+    "/usr/lib/slopology"
+do
+    if [ -n "${_candidate}" ] && [ -f "${_candidate}/sky.sh" ]; then
+        SKY_LIB_DIR="${_candidate}"
+        break
+    fi
+done
+
+if [ -z "${SKY_LIB_DIR:-}" ] || [ ! -f "${SKY_LIB_DIR}/sky.sh" ]; then
+    printf 'slopology: cannot find lib/sky.sh; set SKY_LIB_DIR\n' >&2
+    exit 2
+fi
+
+. "${SKY_LIB_DIR}/sky.sh"
+
+CMD=""
+POS1=""
+POS2=""
+POS3=""
+NPOS=0
+JSON=0
+LAT=""
+LON=""
+PLACE=""
+TZ_NAME=""
+WHEN="now"
+UNITS=""
+DAYS=""
+HOURS=""
+LANG_CODE=""
+COUNT=""
+CSV_ONLY=0
+NO_CACHE=0
+OFFLINE=0
+REFRESH=0
+MAX_AGE=""
+HOUR12=""
+
+usage() {
+    cat <<'EOF'
+slopology — daylight, twilight and weather for any place on Earth.
+
+usage: slopology [command] [options]
+
+commands
+  now                 what the sky is doing, and the weather (default)
+  sun                 sunrise, sunset, twilights, golden and blue hour
+  phase               day/night phase, sun elevation, next boundary
+  night               the sunset -> sunrise window
+  position            the sun's elevation and azimuth
+  weather             current, hourly and daily forecast
+  place <query>       look a town or city up
+  where               detect the position from the network
+  wmo [code]          weather-code descriptions (the whole table if no code)
+  convert <v> <from> <to>
+                      unit conversion (c f, kmh mph, mm in, hpa inhg, ...)
+
+place
+  --lat N --lon N     explicit position
+  --place NAME        geocode a place instead
+  --tz ZONE           IANA zone (Europe/Paris); default: the place's, or local
+  (with neither, the position is detected from the network)
+
+time
+  --date WHEN         now (default), epoch seconds, YYYY-MM-DD, or ISO-8601
+  --hour12            print 12-hour clocks
+
+weather
+  --units metric|imperial
+  --days N            forecast days, 1-16 (default 7)
+  --hours N           forecast hours, 1-384 (default 25)
+  --max-age SECONDS   cache lifetime (default 900)
+  --no-cache          do not read or write the cache
+  --offline           cache only, never the network
+  --refresh           ignore a fresh cache entry
+  --csv               print the provider's raw CSV instead of a report
+
+output
+  --json              the full JSON document, for scripts
+  -h, --help          this text
+  --version           the version
+
+environment
+  SKY_UNITS, SKY_DAYS, SKY_HOURS, SKY_LANG, SKY_MAX_AGE, SKY_CACHE,
+  SKY_CACHE_DIR, SKY_FETCH_CMD, SKY_CURRENT, SKY_HOURLY, SKY_DAILY
+
+examples
+  slopology sun --place Tokyo
+  slopology weather --lat 51.5074 --lon -0.1278 --units imperial
+  slopology now --json | jq .phase
+  slopology night --place Reykjavik
+
+data: Open-Meteo (CC BY 4.0) for the forecast and the geocoder; sun maths
+is NOAA's general solar position, accurate to about a minute, no network.
+EOF
+}
+
+die() {
+    printf 'slopology: %s\n' "$*" >&2
+    exit 2
+}
+
+need_value() {
+    [ "$#" -ge 2 ] && [ -n "$2" ] || die "$1 needs a value"
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --json) JSON=1 ;;
+        --lat) need_value "$@"; LAT="$2"; shift ;;
+        --lon) need_value "$@"; LON="$2"; shift ;;
+        --place) need_value "$@"; PLACE="$2"; shift ;;
+        --tz) need_value "$@"; TZ_NAME="$2"; shift ;;
+        --date) need_value "$@"; WHEN="$2"; shift ;;
+        --units) need_value "$@"; UNITS="$2"; shift ;;
+        --days) need_value "$@"; DAYS="$2"; shift ;;
+        --hours) need_value "$@"; HOURS="$2"; shift ;;
+        --language|--lang) need_value "$@"; LANG_CODE="$2"; shift ;;
+        --count) need_value "$@"; COUNT="$2"; shift ;;
+        --max-age) need_value "$@"; MAX_AGE="$2"; shift ;;
+        --no-cache) NO_CACHE=1 ;;
+        --offline) OFFLINE=1 ;;
+        --refresh) REFRESH=1 ;;
+        --csv) CSV_ONLY=1 ;;
+        --hour12) HOUR12=1 ;;
+        -h|--help) usage; exit 0 ;;
+        --version) sky_version; exit 0 ;;
+        --) shift; while [ "$#" -gt 0 ]; do
+                NPOS=$((NPOS + 1))
+                case "${NPOS}" in
+                    1) POS1="$1" ;;
+                    2) POS2="$1" ;;
+                    3) POS3="$1" ;;
+                esac
+                shift
+            done ;;
+        --*) die "unknown option: $1" ;;
+        -*) die "unknown option: $1" ;;
+        *)
+            if [ -z "${CMD}" ]; then
+                CMD="$1"
+            else
+                NPOS=$((NPOS + 1))
+                case "${NPOS}" in
+                    1) POS1="$1" ;;
+                    2) POS2="$1" ;;
+                    3) POS3="$1" ;;
+                esac
+            fi ;;
+    esac
+    shift
+done
+
+[ -n "${CMD}" ] || CMD="now"
+[ -n "${UNITS}" ] && SKY_UNITS="${UNITS}"
+[ -n "${DAYS}" ] && SKY_DAYS="${DAYS}"
+[ -n "${HOURS}" ] && SKY_HOURS="${HOURS}"
+[ -n "${LANG_CODE}" ] && SKY_LANG="${LANG_CODE}"
+[ -n "${MAX_AGE}" ] && SKY_MAX_AGE="${MAX_AGE}"
+[ "${NO_CACHE}" = "1" ] && SKY_CACHE=0
+[ "${OFFLINE}" = "1" ] && SKY_OFFLINE=1
+[ "${REFRESH}" = "1" ] && SKY_REFRESH=1
+[ "${HOUR12}" = "1" ] && SKY_HOUR12=1
+
+case "${SKY_UNITS:-metric}" in
+    metric|imperial) ;;
+    *) die "--units must be metric or imperial" ;;
+esac
+if [ -n "${SKY_DAYS:-}" ]; then
+    case "${SKY_DAYS}" in ''|*[!0-9]*) die "--days must be a number" ;; esac
+fi
+if [ -n "${SKY_HOURS:-}" ]; then
+    case "${SKY_HOURS}" in ''|*[!0-9]*) die "--hours must be a number" ;; esac
+fi
+
+LABEL=""
+
+resolve_place() {
+    [ -n "${LAT}" ] && [ -n "${LON}" ] && return 0
+    if { [ -n "${LAT}" ] && [ -z "${LON}" ]; } || { [ -z "${LAT}" ] && [ -n "${LON}" ]; }; then
+        die "--lat and --lon go together"
+    fi
+    if [ "${OFFLINE}" = "1" ]; then
+        die "--offline needs --lat and --lon; a place lookup is a network call"
+    fi
+    if [ -n "${PLACE}" ]; then
+        _found=$(sky_place "${PLACE}" 1) || exit 1
+        _flat=$(printf '%s\n' "${_found}" | _sky_awk -v mode=flatten)
+        LAT=$(flat_get "${_flat}" "0.latitude")
+        LON=$(flat_get "${_flat}" "0.longitude")
+        LABEL=$(flat_get "${_flat}" "0.label")
+        [ -n "${LAT}" ] && [ -n "${LON}" ] || die "no place by that name"
+        if [ -z "${TZ_NAME}" ]; then
+            TZ_NAME=$(flat_get "${_flat}" "0.timezone")
+        fi
+        return 0
+    fi
+    _found=$(sky_where) || exit 1
+    _flat=$(printf '%s\n' "${_found}" | _sky_awk -v mode=flatten)
+    LAT=$(flat_get "${_flat}" "latitude")
+    LON=$(flat_get "${_flat}" "longitude")
+    LABEL=$(flat_get "${_flat}" "label")
+    [ -n "${TZ_NAME}" ] || TZ_NAME=$(flat_get "${_flat}" "timezone")
+    [ -n "${LAT}" ] && [ -n "${LON}" ] || die "could not detect a position"
+}
+
+# Reads a value from flattened JSON (path<TAB>value lines) without another
+# process per lookup.
+flat_get() {
+    printf '%s\n' "$1" | while IFS="$(printf '\t')" read -r _k _v; do
+        if [ "${_k}" = "$2" ]; then
+            printf '%s' "${_v}"
+            break
+        fi
+    done
+}
+
+FLAT=""
+flatten() {
+    FLAT=$(printf '%s\n' "$1" | _sky_awk -v mode=flatten) || return 1
+}
+
+jget() {
+    flat_get "${FLAT}" "$1"
+}
+
+clock_of() {
+    if [ -z "${1:-}" ]; then
+        printf '—'
+        return
+    fi
+    sky_format_minute "$1" "${HOUR12:-${SKY_HOUR12:-0}}"
+}
+
+duration() {
+    _s="$1"
+    _s=${_s%%.*}
+    case "${_s}" in ''|*[!0-9-]*) printf '—'; return ;; esac
+    [ "${_s}" -lt 0 ] && _s=$((-_s))
+    _h=$((_s / 3600))
+    _m=$(((_s % 3600) / 60))
+    if [ "${_h}" -gt 0 ] && [ "${_m}" -gt 0 ]; then
+        printf '%d h %d min' "${_h}" "${_m}"
+    elif [ "${_h}" -gt 0 ]; then
+        printf '%d h' "${_h}"
+    else
+        printf '%d min' "${_m}"
+    fi
+}
+
+place_header() {
+    if [ -n "${LABEL}" ]; then
+        printf '%s' "${LABEL}"
+    elif [ -n "${LAT}" ]; then
+        printf '%s, %s' "${LAT}" "${LON}"
+    else
+        return 0
+    fi
+    [ -n "${TZ_NAME}" ] && printf ' · %s' "${TZ_NAME}"
+    printf '\n'
+}
+
+event_line() {
+    _label="$1"
+    _path="$2"
+    _m=$(jget "${_path}.minute")
+    if [ -z "${_m}" ]; then
+        printf '  %-20s —\n' "${_label}"
+    else
+        printf '  %-20s %s\n' "${_label}" "$(clock_of "${_m}")"
+    fi
+}
+
+print_json() {
+    printf '%s\n' "$1"
+}
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+cmd_sun() {
+    resolve_place
+    _json=$(sky_solar "${WHEN}" "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    place_header
+    printf '%s %s\n' "$(jget weekday)" "$(jget date)"
+    event_line "astronomical dawn" "events.astronomical_dawn"
+    event_line "nautical dawn" "events.nautical_dawn"
+    event_line "civil dawn" "events.civil_dawn"
+    event_line "sunrise" "events.sunrise"
+    event_line "golden hour ends" "events.golden_hour_morning_end"
+    event_line "solar noon" "events.solar_noon"
+    event_line "golden hour starts" "events.golden_hour_evening_start"
+    event_line "sunset" "events.sunset"
+    event_line "civil dusk" "events.civil_dusk"
+    event_line "nautical dusk" "events.nautical_dusk"
+    event_line "astronomical dusk" "events.astronomical_dusk"
+    _polar=$(jget polar)
+    if [ "${_polar}" = "midnight-sun" ]; then
+        printf '  %-20s %s\n' "day length" "24 h (midnight sun)"
+    elif [ "${_polar}" = "polar-night" ]; then
+        printf '  %-20s %s\n' "day length" "0 (polar night)"
+    else
+        printf '  %-20s %s\n' "day length" "$(duration "$(jget day_length_seconds)")"
+    fi
+}
+
+cmd_phase() {
+    resolve_place
+    _json=$(sky_phase "${WHEN}" "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    place_header
+    _phase=$(jget phase)
+    _elev=$(jget elevation)
+    _tw=$(jget twilight)
+    _day=$(jget is_day)
+    printf '%s %s · %s' "$(jget sun.weekday)" "$(jget sun.date)" "${_phase}"
+    case "${_tw}" in
+        civil|nautical|astronomical) printf ' (%s twilight)' "${_tw}" ;;
+    esac
+    if [ "${_day}" = "true" ]; then
+        printf ' · sun %s° above the horizon\n' "${_elev}"
+    else
+        printf ' · sun %s° below the horizon\n' "$(printf '%s' "${_elev}" | tr -d '-')"
+    fi
+    _next=$(jget next.event)
+    if [ -n "${_next}" ]; then
+        _min=$(jget next.minute)
+        printf '  next: %s at %s (in %s)\n' "$(printf '%s' "${_next}" | tr '_' ' ')" "$(clock_of "${_min}")" \
+            "$(duration "$(jget next.in_seconds)")"
+    fi
+    printf '  day length %s\n' "$(duration "$(jget day_length_seconds)")"
+}
+
+cmd_night() {
+    resolve_place
+    _json=$(sky_night "${WHEN}" "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    _polar=$(jget polar)
+    if [ "${_polar}" = "midnight-sun" ]; then
+        printf 'Midnight sun: the sun does not set today%s\n' "${LABEL:+ in ${LABEL}}"
+        return
+    fi
+    if [ "${_polar}" = "polar-night" ]; then
+        printf 'Polar night: the sun does not rise today%s\n' "${LABEL:+ in ${LABEL}}"
+        return
+    fi
+    _start=$(jget start_minute)
+    _end=$(jget end_minute)
+    printf 'Night: %s → %s (%s)%s\n' \
+        "$(clock_of "${_start}")" "$(clock_of "${_end}")" \
+        "$(duration "$(jget duration_seconds)")" "${LABEL:+ · ${LABEL}}"
+    if [ "$(jget active)" = "true" ]; then
+        printf '  now: night\n'
+    else
+        printf '  now: day\n'
+    fi
+}
+
+cmd_position() {
+    resolve_place
+    _json=$(sky_position "${WHEN}" "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    place_header
+    printf 'elevation %s° · azimuth %s° · zenith %s°\n' \
+        "$(jget elevation)" "$(jget azimuth)" "$(jget zenith)"
+}
+
+cmd_weather() {
+    resolve_place
+    if [ "${CSV_ONLY}" = "1" ]; then
+        sky_weather_csv "${LAT}" "${LON}" "${TZ_NAME}" || exit 1
+        return
+    fi
+    _json=$(sky_weather "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+
+    _tu=$(jget units.temperature)
+    _wu=$(jget units.wind_speed)
+    [ -n "${_tu}" ] || _tu="°C"
+    [ -n "${_wu}" ] || _wu="km/h"
+
+    place_header
+    _desc=$(jget current.description)
+    _temp=$(jget current.temperature)
+    _feels=$(jget current.apparent_temperature)
+    _hum=$(jget current.humidity)
+    _wind=$(jget current.wind_speed)
+    _dir=$(jget current.wind_compass)
+    _code=$(jget current.weather_code)
+    _pop=$(jget current.precipitation_probability)
+    if [ -n "${_desc}" ]; then
+        printf '%s · %s %s' "${_desc}" "${_temp}" "${_tu}"
+        [ -n "${_feels}" ] && printf ' · feels %s %s' "${_feels}" "${_tu}"
+        [ -n "${_hum}" ] && printf ' · humidity %s%%' "${_hum}"
+        [ -n "${_wind}" ] && printf ' · %s %s %s' "${_dir}" "${_wind}" "${_wu}"
+        printf '\n'
+    elif [ -n "${_code}" ]; then
+        printf 'weather code %s\n' "${_code}"
+    else
+        printf 'the forecast has no current conditions\n'
+    fi
+
+    _high=$(jget daily.0.temperature_max)
+    _low=$(jget daily.0.temperature_min)
+    _rain=$(jget daily.0.precipitation_probability_max)
+    _rise=$(jget daily.0.sunrise.minute)
+    _set=$(jget daily.0.sunset.minute)
+    if [ -n "${_high}" ]; then
+        printf '  high %s / low %s %s' "${_high}" "${_low}" "${_tu}"
+        [ -n "${_rain}" ] && printf ' · %s%% rain' "${_rain}"
+        [ -n "${_rise}" ] && printf ' · %s → %s' "$(clock_of "${_rise}")" "$(clock_of "${_set}")"
+        printf '\n'
+    fi
+
+    _i=0
+    _printed=0
+    while [ "${_i}" -lt 8 ]; do
+        _t=$(jget "hourly.${_i}.time")
+        [ -n "${_t}" ] || break
+        _hh=${_t#*T}
+        _hh=${_hh%%:*}
+        _hdesc=$(jget "hourly.${_i}.description")
+        _htemp=$(jget "hourly.${_i}.temperature")
+        _hpop=$(jget "hourly.${_i}.precipitation_probability")
+        [ "${_printed}" -eq 0 ] && printf '\n  next hours\n'
+        printf '  %s  %-22s %6s %s' "${_hh}:00" "${_hdesc}" "${_htemp}" "${_tu}"
+        [ -n "${_hpop}" ] && printf '  %3s%% rain' "${_hpop}"
+        printf '\n'
+        _printed=1
+        _i=$((_i + 1))
+    done
+
+    _i=0
+    _printed=0
+    while [ "${_i}" -lt "${SKY_DAYS:-7}" ]; do
+        _d=$(jget "daily.${_i}.date")
+        [ -n "${_d}" ] || break
+        _ddesc=$(jget "daily.${_i}.description")
+        _dmax=$(jget "daily.${_i}.temperature_max")
+        _dmin=$(jget "daily.${_i}.temperature_min")
+        _dpop=$(jget "daily.${_i}.precipitation_probability_max")
+        [ "${_printed}" -eq 0 ] && printf '\n  forecast\n'
+        printf '  %-12s %-24s %5s/%-5s' "${_d}" "${_ddesc}" "${_dmax}" "${_dmin}"
+        [ -n "${_dpop}" ] && printf '  %3s%% rain' "${_dpop}"
+        printf '\n'
+        _printed=1
+        _i=$((_i + 1))
+    done
+}
+
+cmd_place() {
+    [ -n "${POS1}" ] || die "place needs a name"
+    _json=$(sky_place "${POS1}" "${COUNT:-5}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    _i=0
+    while :; do
+        _name=$(jget "${_i}.name")
+        [ -n "${_name}" ] || break
+        printf '%d. %s\n   %s, %s · %s\n' \
+            "$((_i + 1))" "$(jget "${_i}.label")" \
+            "$(jget "${_i}.latitude")" "$(jget "${_i}.longitude")" \
+            "$(jget "${_i}.timezone")"
+        _i=$((_i + 1))
+    done
+    [ "${_i}" -gt 0 ] || die "no place by that name"
+}
+
+cmd_where() {
+    _json=$(sky_where) || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    flatten "${_json}" || exit 1
+    printf '%s · %s, %s · %s\n' "$(jget label)" "$(jget latitude)" "$(jget longitude)" "$(jget timezone)"
+}
+
+cmd_wmo() {
+    _json=$(sky_wmo "${POS1:-}") || exit 1
+    [ "${JSON}" = "1" ] && { print_json "${_json}"; return; }
+    if [ -n "${POS1}" ]; then
+        flatten "${_json}" || exit 1
+        printf '%s  %s  %s\n' "$(jget code)" "$(jget description)" "$(jget kind)"
+        return
+    fi
+    flatten "${_json}" || exit 1
+    _i=0
+    while :; do
+        _code=$(jget "${_i}.code")
+        [ -n "${_code}" ] || break
+        printf '%-3s %-34s %s\n' "${_code}" "$(jget "${_i}.description")" "$(jget "${_i}.kind")"
+        _i=$((_i + 1))
+    done
+}
+
+cmd_convert() {
+    [ -n "${POS1}" ] && [ -n "${POS2}" ] && [ -n "${POS3}" ] || \
+        die "convert needs a value and two units, e.g. 20 c f"
+    sky_convert "${POS1}" "${POS2}" "${POS3}" || exit 1
+}
+
+cmd_now() {
+    resolve_place
+    if [ "${JSON}" = "1" ]; then
+        _phase=$(sky_phase "${WHEN}" "${LAT}" "${LON}" "${TZ_NAME}") || exit 1
+        _weather=$(sky_weather "${LAT}" "${LON}" "${TZ_NAME}" 2>/dev/null) || _weather="null"
+        printf '{"place":{"label":%s,"latitude":%s,"longitude":%s,"timezone":%s},"phase":%s,"weather":%s}\n' \
+            "$(json_string "${LABEL}")" "${LAT}" "${LON}" "$(json_string "${TZ_NAME}")" "${_phase}" "${_weather}"
+        return
+    fi
+    cmd_phase
+    _weather=$(sky_weather "${LAT}" "${LON}" "${TZ_NAME}" 2>/dev/null) || {
+        printf '  weather: unavailable (offline, or the service is unreachable)\n'
+        return
+    }
+    _flat=$(printf '%s\n' "${_weather}" | _sky_awk -v mode=flatten) || return
+    _desc=$(flat_get "${_flat}" "current.description")
+    _temp=$(flat_get "${_flat}" "current.temperature")
+    _tu=$(flat_get "${_flat}" "units.temperature")
+    [ -n "${_desc}" ] && printf '  %s · %s %s\n' "${_desc}" "${_temp}" "${_tu:-°C}"
+}
+
+json_string() {
+    printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+}
+
+case "${CMD}" in
+    now) cmd_now ;;
+    sun|sunrise|sunset) cmd_sun ;;
+    phase|day|daynight) cmd_phase ;;
+    night) cmd_night ;;
+    position|pos|sunpos) cmd_position ;;
+    weather|forecast) cmd_weather ;;
+    place|search) cmd_place ;;
+    where|detect|locate) cmd_where ;;
+    wmo|codes) cmd_wmo ;;
+    convert|conv) cmd_convert ;;
+    help) usage ;;
+    version) sky_version ;;
+    *) die "unknown command: ${CMD} (try --help)" ;;
+esac
