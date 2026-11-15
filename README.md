@@ -62,7 +62,7 @@ parts have no network at all.
 ## Install
 
 ```sh
-git clone git@irfllc.github.com:industrialricefarmingllc/slopology.git
+git clone https://github.com/industrialricefarmingllc/slopology
 cd slopology
 sudo make install        # /usr/local/bin + /usr/local/lib/slopology + man page
 ```
